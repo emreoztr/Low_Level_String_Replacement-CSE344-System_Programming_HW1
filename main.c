@@ -1,13 +1,16 @@
+#include <unistd.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <fcntl.h>
+
 
 #define INPUT_COUNT 3
 #define BLKSIZE 1024
 
 typedef struct inlineStr{
-    char *str;
+    const char *str;
     int strLen;
 }InlineStr;
 
@@ -30,7 +33,7 @@ typedef struct commandHolder{
 
 void checkInputValidity(int argc);
 CommandHolder parseArgument(const char *argument);
-void translateFile(CommandHolder commands, const char* readBuffer, char* writeBuffer);
+void changeOccurences(int fd, const char* filename, CommandHolder commands);
 
 
 int main(int argc, char const *argv[])
@@ -38,11 +41,14 @@ int main(int argc, char const *argv[])
     checkInputValidity(argc);
     CommandHolder cHolder = parseArgument(argv[1]);
     printf("40\n");
+    int fd = open(argv[2], O_RDWR);
+    printf("%d\n", fd);
+    changeOccurences(fd, argv[2], cHolder);
     char testInput[256] = "testtzzzzytr1str2";
     char testOutput[256] = {'\0'};
-    translateFile(cHolder, testInput, testOutput);
-    printf("%s\n", testOutput);
-
+    //translateFile(cHolder, testInput, testOutput);
+    //printf("%s\n", testOutput);
+    free(cHolder.commands);
     return 0;
 }
 
@@ -58,6 +64,8 @@ Command parseCommand(const char *argument, int *argumentIndex){
     int slashCount = 0;
     int strLen;
     Command command;
+    command.onlyLineStart = 0;
+    command.onlyLineEnd = 0;
 
     while(*argumentIndex < strlen(argument) && argument[*argumentIndex] != ';'){
         strLen = 0;
@@ -72,7 +80,6 @@ Command parseCommand(const char *argument, int *argumentIndex){
         else{
             break;
         }
-        printf("%c %d\n", command.oldStr.str[0], slashCount);
         while(*argumentIndex < strlen(argument) && argument[*argumentIndex] != '/'){
             ++strLen;
             if(argument[*argumentIndex] == '[')
@@ -143,7 +150,6 @@ int isAnyCharacterMatch(Command* command, int *commandIndex, char c){
     int returnVal = 0;
     if(command->oldStr.str[*commandIndex] == '['){
         while(*commandIndex < command->oldStr.strLen && command->oldStr.str[*commandIndex] != ']'){
-            printf("146");
             if(command->oldStr.str[*commandIndex] == c)
                 returnVal = 1;
             ++(*commandIndex);
@@ -160,11 +166,13 @@ int isNextCharMatch(const char *buffer, char c, int ind, int bufferLen){
 }
 
 
-int isCommandMatch(Command* command, const char* readBuffer, int* readBufferIndex, int firstBuffer){
+int isCommandMatch(Command* command, const char* readBuffer, int* readBufferIndex, int firstBuffer, int endBuffer){
     int i;
     int iBak;
     int commandIndex = 0;
     int isMatch = 1;
+    int isStartMatch = 1;
+    int isEndMatch = 1;
     char oldChar;
     for(i = *readBufferIndex; i < strlen(readBuffer) && isMatch == 1; ++i){
        
@@ -196,26 +204,35 @@ int isCommandMatch(Command* command, const char* readBuffer, int* readBufferInde
                 isMatch = 0;
         }
         else if(command->oldStr.str[commandIndex] == '^'){
-            if(firstBuffer && i == 0){
-                --i;
-            }
-            else if(i != 0 && readBuffer[i-1] == '\n'){
-                --i;
+            printf("test %d\n", firstBuffer);
+            if(firstBuffer && i == 0 || (i != 0 && readBuffer[i-1] == '\n')){
+                
             }
             else{
-                isMatch = 0;
+                isStartMatch = 0;
             }
+            --i;
         }
-        else if(command->oldStr.str[commandIndex] == '^' || command->oldStr.str[commandIndex] == '$'){
+        else if(command->oldStr.str[commandIndex] == '$'){
+            if(!((endBuffer && i == strlen(readBuffer) - 1) || (i != strlen(readBuffer) - 1 && readBuffer[i] == '\n')))
+                isEndMatch = 0;
+            
             --i;
         }
         else{
             isMatch = -1;
         }
-        printf("%c %c %d %d\n", command->oldStr.str[commandIndex], readBuffer[i], i, isMatch);
         ++commandIndex;
     }
+    if((command->onlyLineStart && !isStartMatch) && (command->onlyLineEnd && !isEndMatch))
+        isMatch = 0;
+    if(command->onlyLineStart && !command->onlyLineEnd && !isStartMatch)
+        isMatch = 0;
+    if(command->onlyLineEnd && !command->onlyLineStart && !isEndMatch)
+        isMatch = 0;
 
+    if(isMatch == 1 && command->oldStr.str[commandIndex] == '$')
+        ++commandIndex;
     if(isMatch == 1 && commandIndex == command->oldStr.strLen)
         *readBufferIndex = i;
     if(commandIndex != command->oldStr.strLen)
@@ -224,17 +241,14 @@ int isCommandMatch(Command* command, const char* readBuffer, int* readBufferInde
     return isMatch;
 }
 
-void translateFile(CommandHolder commands, const char* readBuffer, char* writeBuffer){
+int translateFile(CommandHolder commands, const char* readBuffer, char* writeBuffer, int firstBuffer, int endBuffer){
     int readBufferInd = 0;
     int writeBufferInd = 0;
     int commandMatchVal;
     
     while(readBufferInd < strlen(readBuffer)){
-        
         for(int i = 0; i < commands.commandCount; ++i){
-            
-            commandMatchVal = isCommandMatch(&(commands.commands[i]), readBuffer, &readBufferInd, 1);
-            printf("%d 215", readBufferInd);
+            commandMatchVal = isCommandMatch(&(commands.commands[i]), readBuffer, &readBufferInd, firstBuffer, endBuffer);
             if(commandMatchVal == 1){
                 for(int j = 0; j < commands.commands[i].newStr.strLen; ++j)
                     writeBuffer[writeBufferInd++] = commands.commands[i].newStr.str[j];
@@ -249,28 +263,33 @@ void translateFile(CommandHolder commands, const char* readBuffer, char* writeBu
             writeBuffer[writeBufferInd++] = readBuffer[readBufferInd++];
         }
     }
-
+    return writeBufferInd;
 }
 
-void changeOccurences(int fd, CommandHolder commands){
+void changeOccurences(int fd, const char* filename, CommandHolder commands){
     int fileFinish = 0;
-    int bytesRead;
-    char readBuffer[BLKSIZE];
+    int bytesRead = -1;
+    char readBuffer[BLKSIZE] = {'\0'};
     char *writeBuffer = (char*)calloc(2*BLKSIZE,sizeof(char));
+    int writeBufferSize;
     int writeBufferCap = 2*BLKSIZE;
 
-
-    int tmpFd = mkstemp("newfile-XXXXXX");
+    char tmpFileName[] = "newfile-XXXXXX";
+    int tmpFd = mkstemp(tmpFileName);
     if(tmpFd < 0){
         //error handling
     }
-
     while(!fileFinish){
         while((bytesRead = read(fd, readBuffer, BLKSIZE) == -1) && (errno == EINTR));
-        if(bytesRead <= 0)
+        if(bytesRead < 0)
             fileFinish = 1;
         if(!fileFinish){
-
+            writeBufferSize = translateFile(commands, readBuffer, writeBuffer, 1, bytesRead == 0);
+            write(tmpFd, writeBuffer, writeBufferSize);
+            printf("%s\n", writeBuffer);
         }
+        if(bytesRead == 0)
+            fileFinish = 1;
     }
+    rename(tmpFileName, filename);
 }
