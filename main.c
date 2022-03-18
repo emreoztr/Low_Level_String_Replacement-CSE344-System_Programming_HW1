@@ -40,9 +40,7 @@ int main(int argc, char const *argv[])
 {
     checkInputValidity(argc);
     CommandHolder cHolder = parseArgument(argv[1]);
-    printf("40\n");
     int fd = open(argv[2], O_RDWR);
-    printf("%d\n", fd);
     changeOccurences(fd, argv[2], cHolder);
     free(cHolder.commands);
     return 0;
@@ -51,9 +49,8 @@ int main(int argc, char const *argv[])
 
 void checkInputValidity(int argc){
     if(argc != INPUT_COUNT){
-        printf("hata\n");
-        fprintf(stderr, "Usage: ./hmw1 ‘/str1/str2/‘ inputFilePath");
-        exit(-1);
+        write(2, "Usage: ./hmw1 ‘/str1/str2/‘ inputFilePath\n", 47);
+        exit(EXIT_FAILURE);
     }
 }
 
@@ -97,7 +94,7 @@ Command parseCommand(const char *argument, int *argumentIndex){
             command.newStr.strLen = strLen;
         
     }
-printf("%d\n", *argumentIndex);
+
     return command;
 }
 
@@ -109,29 +106,24 @@ CommandHolder parseArgument(const char *argument){
     commandHolder.commands = (Command*)calloc(8, sizeof(Command));
     /*error check*/
     commandHolder.cap = 8;
-    printf("%s\n", argument);
     
     
     for (int i = 0; i < argumentLen && isCorrectSyntax; ++i){
-        printf("%c argument\n", argument[i]);
         if(argument[i] == '/' && (i == 0 || argument[i - 1] == ';')){
             if(commandHolder.commandCount >= commandHolder.cap){
-                printf("%s\n", argument);
                 commandHolder.commands = (Command*)realloc(commandHolder.commands, commandHolder.cap * 2 * sizeof(Command));
                 
                 commandHolder.cap *= 2;
             }
             
             commandHolder.commands[commandHolder.commandCount++] = parseCommand(argument, &i);
-            printf("%c argument2\n", argument[i]);
             if(i <= argumentLen - 1 && argument[i] == 'i'){
-                printf("%c argument3\n", argument[i]);
                 commandHolder.commands[commandHolder.commandCount - 1].insensitive = 1;
                 if(i < argumentLen - 1 && argument[i+1] == ';'){
                     if(i+1 < argumentLen)
                         i+=1;
                     else
-                        fprintf(stderr, "Invalid syntax for argument.\n");
+                        write(2, "Invalid syntax for argument.\n", 30);
                 }
             }
         }
@@ -141,8 +133,8 @@ CommandHolder parseArgument(const char *argument){
     }
 
     if(!isCorrectSyntax){
-        fprintf(stderr, "Usage: ./hmw1 ‘/str1/str2/‘ inputFilePath");
-        exit(-1);
+        write(2, "Usage: ./hmw1 ‘/str1/str2/‘ inputFilePath", 46);
+        exit(EXIT_FAILURE);
     }
     return commandHolder;
 }
@@ -178,7 +170,6 @@ int isAnyCharacterMatchReverse(Command* command, int commandIndex, char c){
     int returnVal = 0;
     if(command->oldStr.str[commandIndex] == ']'){
         while(commandIndex < command->oldStr.strLen && command->oldStr.str[commandIndex] != '['){
-            printf("%c\n", command->oldStr.str[commandIndex]);
             if(isCharMatch(command->oldStr.str[commandIndex], c, command->insensitive))
                 return 1;
             --(commandIndex);
@@ -200,24 +191,19 @@ int isNextCharMatch(const char *buffer, char c, int ind, int bufferLen){
 
 int isCommandMatch(Command* command, const char* readBuffer, int* readBufferIndex, int firstBuffer, int endBuffer){
     int i;
-    int iBak;
     int commandIndex = 0;
     int isMatch = 1;
     int isStartMatch = 1;
     int isEndMatch = 1;
     
-    char oldChar;
     for(i = *readBufferIndex; i < strlen(readBuffer) && isMatch == 1; ++i){
-       printf("%c %c\n", command->oldStr.str[commandIndex ], readBuffer[i]);
         if(commandIndex >= command->oldStr.strLen)
             break;
         
         if(command->oldStr.str[commandIndex] == '['){
             isMatch = isAnyCharacterMatch(command, &commandIndex, readBuffer[i]);
-            printf("readbuf %c command %c ismathc %d\n", readBuffer[*readBufferIndex], command->oldStr.str[commandIndex], isMatch);
         }
         else if(command->oldStr.str[commandIndex] == '*'){
-            printf("%c\n", readBuffer[i]);
             if(commandIndex <= 0)
                 isMatch = -1;
             
@@ -230,7 +216,6 @@ int isCommandMatch(Command* command, const char* readBuffer, int* readBufferInde
             }
             else if(command->oldStr.str[commandIndex - 1] == ']'){
                 int f = 0;
-                printf("214\n");
                 while(i < strlen(readBuffer) && isAnyCharacterMatchReverse(command, commandIndex - 1, readBuffer[i])){
                     f++;
                     i++;
@@ -238,7 +223,6 @@ int isCommandMatch(Command* command, const char* readBuffer, int* readBufferInde
                 i--;
                 if(f == 0)
                     i--;
-                printf("test %c  %c\n", readBuffer[i], command->oldStr.str[commandIndex]);
             }
         }
         else if(isNextCharMatch(command->oldStr.str, '*', commandIndex, command->oldStr.strLen)){
@@ -251,7 +235,7 @@ int isCommandMatch(Command* command, const char* readBuffer, int* readBufferInde
                 isMatch = 0;
         }
         else if(command->oldStr.str[commandIndex] == '^'){
-            if(firstBuffer && i == 0 || (i != 0 && readBuffer[i-1] == '\n')){
+            if((firstBuffer && i == 0) || (i != 0 && readBuffer[i-1] == '\n')){
                 
             }
             else{
@@ -301,8 +285,8 @@ int translateFile(CommandHolder commands, const char* readBuffer, char* writeBuf
                 break;
             }
             else if(commandMatchVal == -1){
-                //error handling
-                exit(-1);
+                write(2, "Check * and ; syntax again!\n", 29);
+                exit(EXIT_FAILURE);
             }
         }
         if(commandMatchVal == 0){
@@ -318,14 +302,17 @@ void changeOccurences(int fd, const char* filename, CommandHolder commands){
     char readBuffer[BLKSIZE] = {'\0'};
     char *writeBuffer = (char*)calloc(2*BLKSIZE,sizeof(char));
     int writeBufferSize;
-    int writeBufferCap = 2*BLKSIZE;
     int fileStart = 1;
-    char tmpFileName[] = "newfile-XXXXXX";
+    char tmpFileName[] = "tmpXXXXXX";
     int tmpFd = mkstemp(tmpFileName);
+    struct flock lock;
+
     if(tmpFd <= 0){
         perror("mkstemp: ");
-        exit(-1);
+        exit(EXIT_FAILURE);
     }
+    lock.l_type = F_WRLCK;
+    fcntl(fd, F_SETLKW, &lock);
     while(!fileFinish){
         while((bytesRead = read(fd, readBuffer, BLKSIZE) == -1) && (errno == EINTR));
         if(bytesRead < 0)
@@ -333,11 +320,25 @@ void changeOccurences(int fd, const char* filename, CommandHolder commands){
         if(!fileFinish){
             writeBufferSize = translateFile(commands, readBuffer, writeBuffer, fileStart, bytesRead == 0);
             write(tmpFd, writeBuffer, writeBufferSize);
-            printf("%s\n", writeBuffer);
         }
         if(bytesRead == 0)
             fileFinish = 1;
         fileStart = 0;
     }
+    lock.l_type = F_UNLCK;
+    fcntl(fd, F_SETLKW, &lock);
+    fd = close(fd);
+    if(fd < 0){
+        perror("Couldn't close the file: ");
+        exit(EXIT_FAILURE);
+    }
     rename(tmpFileName, filename);
+    tmpFd = close(fd);
+    if(tmpFd < 0){
+        perror("Couldn't close the file: ");
+        exit(EXIT_FAILURE);
+    }
+
+    free(writeBuffer);
+    
 }
